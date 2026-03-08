@@ -67,7 +67,7 @@ func scheduleParallelDownload(task: Task, taskDescription: String, baseRequest: 
  / Similarly, pause and cancel commands are sent to all chunk tasks before
  / updating the status of the parent ParallelDownloadTask
  */
-public class ParallelDownloader: NSObject {
+public class ParallelDownloader: NSObject, @unchecked Sendable {
     // downloads is the list of active parallel downloads, used to route child
     // status and progress updates
     static var downloads: [String : ParallelDownloader] = [:] // keyed by parentTask.taskId
