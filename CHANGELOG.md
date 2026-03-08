@@ -1,3 +1,7 @@
+## 9.5.4-dlct.1
+
+* [DLCT Fork] Added `@unchecked Sendable` conformance to `ParallelDownloader` for Swift 6 strict concurrency compatibility. The class manages thread safety via `BDPlugin.propertyLock` and `URLSession` delegate queues.
+
 ## 9.5.4
 
 * Add `TaskOptions` to `DataTask` with similar functionality as in `DownloadTask`
