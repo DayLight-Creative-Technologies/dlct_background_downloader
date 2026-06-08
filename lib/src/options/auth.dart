@@ -30,18 +30,31 @@ import 'auth_callback.dart';
 ///   auth uses headers, then use `{accessToken}` to indicate where the token
 ///   should go, eg `{"Authentication":" Bearer {accessToken}"}` will add a
 ///   typical authentication header for OAuth or JWT based requests.
-/// - Add information for refresh, eg [refreshToken], [refreshUrl] if you want
-///   to use the default handler
-/// - If you use your own handler, add that as `onAuth` - otherwise the refresh
-///   will be attempted using [defaultOnAuth]
+/// - To enable token refresh, you MUST register an `onAuth` callback: pass
+///   your own handler, or pass [defaultOnAuth] explicitly (together with
+///   [refreshToken] and [refreshUrl]) to use the built-in refresh request.
+///   [DLCT] If no `onAuth` callback is registered, NO refresh is ever
+///   attempted - setting [refreshToken]/[refreshUrl] by themselves does
+///   nothing. (An earlier version of this comment claimed [defaultOnAuth]
+///   was used as an automatic fallback; it is not, on any platform.)
 ///
 /// For tasks that contain an [Auth] object, the background_downloader will
-/// first check if the token is expired. If the token is expired, it will call
-/// the `onAuth` callback, which should refresh the token by calling
-/// [refreshToken], which will update the [Auth] associated with the task, then
-/// return the modified task.
+/// first check if the token is expired. If the token is expired AND an
+/// `onAuth` callback is registered, it will call that callback, which should
+/// refresh the token by calling [refreshAccessToken], which will update the
+/// [Auth] associated with the task, then return the modified task.
 /// The downloader will substitute the `{accessToken}` placeholder with the
 /// accessToken in both query parameters and headers before executing the task.
+///
+/// ### Warning: refresh token rotation [DLCT]
+/// [refreshAccessToken] stores a rotated refresh token in this [Auth] object
+/// only. If your auth provider rotates refresh tokens on every use (e.g.
+/// Supabase GoTrue), refreshing here desynchronizes any other session store
+/// in your app that holds the same token family, and the provider's reuse
+/// detection may revoke the whole family (signing the user out). In that
+/// case, refresh through your auth SDK in a custom `onAuth` callback (where
+/// app state is available), or re-enqueue tasks with a fresh access token
+/// instead of using in-task refresh.
 ///
 /// ### Key Properties
 /// - [accessToken]: The current access token used for authentication.

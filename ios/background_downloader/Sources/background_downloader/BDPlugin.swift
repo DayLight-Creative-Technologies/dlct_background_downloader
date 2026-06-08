@@ -300,6 +300,26 @@ public class BDPlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDelegate
                 baseRequest.setValue(value, forHTTPHeaderField: key)
             }
         }
+        // [DLCT] Apply Auth (Task.options.auth) at enqueue time: substitute the
+        // {accessToken} / {refreshToken} templates into headers and query
+        // parameters. Mirrors Android, where TaskRunner.getModifiedTask applies
+        // auth unconditionally for every task with an Auth object. Without
+        // this, an iOS task whose authorization lives in Auth.accessHeaders is
+        // enqueued with no auth headers at all unless it also has a callback
+        // (and even then only if the willBeginDelayedRequest hook fires).
+        // Tasks with callbacks additionally get earliestBeginDate set in
+        // scheduleDownload/scheduleUpload so the delayed-request hook can
+        // refresh a stale token just before the request starts.
+        if let auth = task.options?.auth {
+            let updatedUrl = auth.addOrUpdateQueryParams(
+                url: url.absoluteString,
+                queryParams: auth.getExpandedAccessQueryParams()
+            )
+            baseRequest.url = updatedUrl
+            for (key, value) in auth.getExpandedAccessHeaders() {
+                baseRequest.setValue(value, forHTTPHeaderField: key)
+            }
+        }
         let requiresWiFi = taskRequiresWiFi(task: task)
         if requiresWiFi {
             baseRequest.allowsCellularAccess = false
@@ -330,6 +350,11 @@ public class BDPlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDelegate
         let urlSessionDownloadTask = resumeData == nil ? UrlSessionDelegate.urlSession!.downloadTask(with: request) : UrlSessionDelegate.urlSession!.downloadTask(withResumeData: resumeData!)
         urlSessionDownloadTask.taskDescription = taskDescription
         urlSessionDownloadTask.priority = 1 - Float(task.priority) / 10
+        if taskNeedsDelayedRequestHook(task: task) {
+            // [DLCT] URLSession only invokes urlSession(_:task:willBeginDelayedRequest:)
+            // for tasks with earliestBeginDate set; the callbacks depend on that hook
+            urlSessionDownloadTask.earliestBeginDate = Date()
+        }
         urlSessionDownloadTask.resume()
         await postEnqueuedStatusIfNotAlreadyDone(task: task, notificationConfigJsonString: notificationConfigJsonString)
         return true
@@ -451,6 +476,10 @@ public class BDPlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDelegate
             let urlSessionUploadTask = UrlSessionDelegate.urlSession!.uploadTask(with: request, fromFile: uploadFileUrl)
             urlSessionUploadTask.taskDescription = taskDescription
             urlSessionUploadTask.priority = 1 - Float(task.priority) / 10
+            if taskNeedsDelayedRequestHook(task: task) {
+                // [DLCT] see scheduleDownload: required for the willBeginDelayedRequest hook
+                urlSessionUploadTask.earliestBeginDate = Date()
+            }
             urlSessionUploadTask.resume()
         }
         else {
@@ -467,6 +496,10 @@ public class BDPlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDelegate
             let urlSessionUploadTask = UrlSessionDelegate.urlSession!.uploadTask(with: request, fromFile: uploader.outputFileUrl())
             urlSessionUploadTask.taskDescription = taskDescription
             urlSessionUploadTask.priority = 1 - Float(task.priority) / 10
+            if taskNeedsDelayedRequestHook(task: task) {
+                // [DLCT] see scheduleDownload: required for the willBeginDelayedRequest hook
+                urlSessionUploadTask.earliestBeginDate = Date()
+            }
             BDPlugin.uploaderForUrlSessionTaskIdentifier[urlSessionUploadTask.taskIdentifier] = uploader
             urlSessionUploadTask.resume()
         }

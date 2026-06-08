@@ -595,16 +595,26 @@ abstract base class BaseDownloader {
             (!Platform.isAndroid || record.task is! UriDownloadTask) &&
             record.status != TaskStatus.complete,
       )) {
-        final filePath = await record.task.filePath();
-        if (await File(filePath).exists()) {
-          processStatusUpdate(
-            TaskStatusUpdate(record.task, TaskStatus.complete),
+        try {
+          final filePath = await record.task.filePath();
+          if (await File(filePath).exists()) {
+            processStatusUpdate(
+              TaskStatusUpdate(record.task, TaskStatus.complete),
+            );
+            final updatedRecord = record.copyWith(
+              status: TaskStatus.complete,
+              progress: progressComplete,
+            );
+            await database.updateRecord(updatedRecord);
+          }
+        } catch (e) {
+          // [DLCT] One failed record (e.g. file access denied while an iOS
+          // device is locked) must not abort reconciliation of the remaining
+          // records; the record self-heals on the next status update.
+          log.warning(
+            'Failed to reconcile task record for taskId '
+            '${record.task.taskId}: $e',
           );
-          final updatedRecord = record.copyWith(
-            status: TaskStatus.complete,
-            progress: progressComplete,
-          );
-          await database.updateRecord(updatedRecord);
         }
         if (DateTime.now().difference(startTime).inMilliseconds > 10) {
           await Future.delayed(const Duration(milliseconds: 50));
@@ -1081,6 +1091,12 @@ abstract base class BaseDownloader {
   }
 
   /// Execute one database update consumed from the [_databaseUpdates] stream
+  ///
+  /// [DLCT] The body is guarded: task records are best-effort bookkeeping, and
+  /// a failed write (e.g. the OS denying file access while an iOS device is
+  /// locked, or a full disk) must not surface as an unhandled error on the
+  /// [_databaseUpdates] stream. A missed write self-heals on the next status
+  /// or progress update, which writes the full record again.
   Future<void> _consumeUpdateTaskInDatabase(
     Task task,
     TaskStatus? status,
@@ -1088,46 +1104,52 @@ abstract base class BaseDownloader {
     int expectedFileSize,
     TaskException? taskException,
   ) async {
-    if (trackedGroups.contains(null) || trackedGroups.contains(task.group)) {
-      if (status == null && progress != null) {
-        // update existing record with progress only (provided it's not 'paused')
-        final existingRecord = await database.recordForId(task.taskId);
-        if (existingRecord != null && progress != progressPaused) {
+    try {
+      if (trackedGroups.contains(null) || trackedGroups.contains(task.group)) {
+        if (status == null && progress != null) {
+          // update existing record with progress only (provided it's not 'paused')
+          final existingRecord = await database.recordForId(task.taskId);
+          if (existingRecord != null && progress != progressPaused) {
+            await database.updateRecord(
+              existingRecord.copyWith(progress: progress),
+            );
+          }
+          return;
+        }
+        if (progress == null && status != null) {
+          // set progress based on status
+          progress = switch (status) {
+            TaskStatus.enqueued || TaskStatus.running => 0.0,
+            TaskStatus.complete => progressComplete,
+            TaskStatus.notFound => progressNotFound,
+            TaskStatus.failed => progressFailed,
+            TaskStatus.canceled => progressCanceled,
+            TaskStatus.waitingToRetry => progressWaitingToRetry,
+            TaskStatus.paused => progressPaused,
+          };
+        }
+        if (status != TaskStatus.paused) {
           await database.updateRecord(
-            existingRecord.copyWith(progress: progress),
+            TaskRecord(task, status!, progress!, expectedFileSize, taskException),
+          );
+        } else {
+          // if paused, don't modify the stored progress
+          final existingRecord = await database.recordForId(task.taskId);
+          await database.updateRecord(
+            TaskRecord(
+              task,
+              status!,
+              existingRecord?.progress ?? 0,
+              expectedFileSize,
+              taskException,
+            ),
           );
         }
-        return;
       }
-      if (progress == null && status != null) {
-        // set progress based on status
-        progress = switch (status) {
-          TaskStatus.enqueued || TaskStatus.running => 0.0,
-          TaskStatus.complete => progressComplete,
-          TaskStatus.notFound => progressNotFound,
-          TaskStatus.failed => progressFailed,
-          TaskStatus.canceled => progressCanceled,
-          TaskStatus.waitingToRetry => progressWaitingToRetry,
-          TaskStatus.paused => progressPaused,
-        };
-      }
-      if (status != TaskStatus.paused) {
-        await database.updateRecord(
-          TaskRecord(task, status!, progress!, expectedFileSize, taskException),
-        );
-      } else {
-        // if paused, don't modify the stored progress
-        final existingRecord = await database.recordForId(task.taskId);
-        await database.updateRecord(
-          TaskRecord(
-            task,
-            status!,
-            existingRecord?.progress ?? 0,
-            expectedFileSize,
-            taskException,
-          ),
-        );
-      }
+    } catch (e) {
+      log.warning(
+        'Failed to update task record for taskId ${task.taskId}: $e',
+      );
     }
   }
 

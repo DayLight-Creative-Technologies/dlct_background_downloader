@@ -55,6 +55,18 @@ func isDataTask(task: Task) -> Bool {
     return task.taskType == "DataTask"
 }
 
+/// [DLCT] True if this task has a callback that must run via the
+/// urlSession(_:task:willBeginDelayedRequest:) delegate just before the
+/// request starts (beforeTaskStart, onTaskStart, or onAuth token refresh).
+///
+/// URLSession only invokes that delegate for tasks whose `earliestBeginDate`
+/// is set, so the enqueue path sets it (to now) for exactly these tasks.
+func taskNeedsDelayedRequestHook(task: Task) -> Bool {
+    return task.options?.hasBeforeStartCallback() == true
+        || task.options?.hasOnStartCallback() == true
+        || task.options?.auth?.hasOnAuthCallback() == true
+}
+
 /// True if this state is not a final state (i.e. more changes may happen)
 func isNotFinalState(status: TaskStatus) -> Bool {
     return status == .enqueued || status == .running || status == .waitingToRetry || status == .paused
