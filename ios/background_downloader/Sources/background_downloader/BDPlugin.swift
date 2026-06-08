@@ -962,11 +962,12 @@ public class BDPlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDelegate
     public func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions
     {
         if ourCategories.contains(notification.request.content.categoryIdentifier) {
-            if #available(iOS 14.0, *) {
-                return UNNotificationPresentationOptions.list
-            } else {
-                return UNNotificationPresentationOptions.alert
-            }
+            // Suppress our upload/download notifications while the app is in the
+            // foreground. `willPresent` is invoked ONLY when the app is in the
+            // foreground, so returning no presentation options hides the
+            // notification in-app; a backgrounded task's notification never
+            // reaches this delegate and still shows normally. (DLCT)
+            return []
         }
         return []
     }

@@ -1,3 +1,9 @@
+## 9.5.4-dlct.3
+
+* [DLCT Fork] **Notifications are suppressed while the host app is in the foreground.** When the app has a visible (foreground) process, upload/download notifications are no longer shown — the host app surfaces its own in-app progress UI, so a system notification there is redundant and intrusive. Backgrounded tasks (the common case) still post notifications, so a user who leaves the app mid-transfer still sees progress. A mandatory foreground-service notification (`runInForeground`) is never suppressed.
+  * iOS: `userNotificationCenter(_:willPresent:)` now returns no presentation options for our notification categories. `willPresent` is invoked only while the app is in the foreground, so backgrounded notifications (which bypass this delegate) are unaffected.
+  * Android: the shared `displayNotification` cancels (rather than posts) the notification when `appIsInForeground(context)` is true and the task is not running as a foreground service. Foreground detection is dependency-free via `ActivityManager` process importance; canceling also clears a notification that was posted while backgrounded once the user returns to the app.
+
 ## 9.5.4-dlct.2
 
 * [DLCT Fork] **iOS: Auth is now applied at enqueue time.** Tasks with a `TaskOptions(auth: ...)` object get their `{accessToken}`/`{refreshToken}` templates substituted into headers and query parameters when the `URLRequest` is built, mirroring Android's unconditional `getModifiedTask` application. Previously on iOS, auth headers were only merged inside the `willBeginDelayedRequest` delegate, which (a) was gated on the task having a callback, so auth-without-callback tasks were sent with **no auth at all**, and (b) never fired anyway — see next item.

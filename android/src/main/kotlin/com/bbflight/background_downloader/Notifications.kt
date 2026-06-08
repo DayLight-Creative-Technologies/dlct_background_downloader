@@ -1,6 +1,7 @@
 package com.bbflight.background_downloader
 
 import android.annotation.SuppressLint
+import android.app.ActivityManager
 import android.app.ForegroundServiceStartNotAllowedException
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -886,6 +887,19 @@ object NotificationService {
                     return
                 }
             }
+            // DLCT: suppress the notification while the host app is in the
+            // foreground — it shows its own in-app progress UI, so a system
+            // notification is redundant and intrusive. A mandatory
+            // foreground-service notification (runInForeground) is never
+            // suppressed; backgrounded tasks (the common case) always notify.
+            // Canceling (rather than skipping) also clears a notification that
+            // was posted while backgrounded once the user returns to the app.
+            if (!taskWorker.runInForeground &&
+                appIsInForeground(taskWorker.appContext)
+            ) {
+                cancel(taskWorker.notificationId)
+                return
+            }
             val androidNotification = builder.build()
             if (taskWorker.runInForeground) {
                 if (notificationType == NotificationType.running && taskWorker.isActive) {
@@ -923,6 +937,25 @@ object NotificationService {
     /**
      * Create the notification channel to use for download notifications
      */
+    /**
+     * Returns true if the host app currently has a foreground (visible) process.
+     * Used to suppress redundant upload/download notifications while the user is
+     * actively in the app. Dependency-free (ActivityManager importance) and
+     * callable from any thread. A non-foreground-service worker reports
+     * IMPORTANCE_SERVICE while backgrounded, so this correctly returns false
+     * then; only a visible activity yields IMPORTANCE_FOREGROUND. (DLCT)
+     */
+    private fun appIsInForeground(context: Context): Boolean {
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            ?: return false
+        val processes = am.runningAppProcesses ?: return false
+        val packageName = context.packageName
+        return processes.any {
+            it.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND &&
+                it.processName == packageName
+        }
+    }
+
     private fun createNotificationChannel(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val name = context.getString(R.string.bg_downloader_notification_channel_name)
