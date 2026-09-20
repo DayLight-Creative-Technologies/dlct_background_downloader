@@ -1,3 +1,7 @@
+## 9.5.4-dlct.4
+
+* [DLCT Fork] Migrated the Android build to Flutter's built-in Kotlin support per the official plugin-author guide (https://docs.flutter.dev/release/breaking-changes/migrate-to-built-in-kotlin/for-plugin-authors): removed the `org.jetbrains.kotlin.android` plugin ID from the `plugins {}` block and the `kotlinOptions` block, and added a top-level `kotlin { compilerOptions { jvmTarget } }` block. The `org.jetbrains.kotlin.plugin.serialization` plugin stays applied — it is unaffected by this change. Flutter warns that a future release will refuse to build apps whose plugins apply the Kotlin Gradle Plugin directly; this closes that warning for consuming apps on AGP 9 with `android.builtInKotlin=false`. Forward migration, not a workaround — no retire condition.
+
 ## 9.5.4-dlct.3
 
 * [DLCT Fork] **Notifications are suppressed while the host app is in the foreground.** When the app has a visible (foreground) process, upload/download notifications are no longer shown — the host app surfaces its own in-app progress UI, so a system notification there is redundant and intrusive. Backgrounded tasks (the common case) still post notifications, so a user who leaves the app mid-transfer still sees progress. A mandatory foreground-service notification (`runInForeground`) is never suppressed.
