@@ -796,18 +796,21 @@ final class DownloadTask extends Task {
         taskWithFilenameBuilder =
         taskWithSuggestedFilename,
   }) async {
+    // Only the HEAD request is guarded: an error thrown by
+    // [taskWithFilenameBuilder] propagates to the caller
+    var responseHeaders = <String, String>{};
     try {
       final response = await DesktopDownloader.httpClient.head(
         Uri.parse(url),
         headers: headers,
       );
       if ([200, 201, 202, 203, 204, 205, 206].contains(response.statusCode)) {
-        return taskWithFilenameBuilder(this, response.headers, unique);
+        responseHeaders = response.headers;
       }
     } catch (e) {
       _log.finer('Error connecting to server');
     }
-    return taskWithFilenameBuilder(this, {}, unique);
+    return taskWithFilenameBuilder(this, responseHeaders, unique);
   }
 
   /// Return the expected file size for this task, or -1 if unknown

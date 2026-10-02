@@ -56,6 +56,7 @@ Use this index to find documentation for specific topics and keywords.
 
 ## M
 *   **Metadata**: [Parameters](parameters.md#metadata-and-displayname) - storing user data with tasks
+*   **Metadata flag**: [Configuration](CONFIG.md#required-metadata-flags-dlct-fork) - requiring a flag in `metaData` before tasks in a group may run
 *   **Mime type**: [Uploads](uploads.md#mime-type) - specifying file types
 *   **Monitoring**: [Database & Monitoring](database.md) - tracking progress and status
 *   **Multi-part upload**: [Uploads](uploads.md#multiple-file-upload) - uploading multiple files
@@ -82,6 +83,7 @@ Use this index to find documentation for specific topics and keywords.
 
 ## R
 *   **Request**: [Requests](requests.md#server-requests) - simple HTTP requests
+*   **Required metaData flags**: [Configuration](CONFIG.md#required-metadata-flags-dlct-fork) - native veto for tasks missing a flag
 *   **Resume**: [Lifecycle](lifecycle.md#canceling-pausing-and-resuming-tasks) - resuming downloads
 *   **Retries**: [Parameters](parameters.md#retries) - automatic retries
 

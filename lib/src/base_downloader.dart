@@ -403,7 +403,7 @@ abstract base class BaseDownloader {
         .where((task) => task.group == group)
         .length;
     tasksWaitingToRetry.removeWhere((task) => task.group == group);
-    final pausedTasks = await getPausedTasks();
+    final pausedTasks = await _pausedTasksOrEmpty('reset');
     var pausedCount = 0;
     for (final task in pausedTasks) {
       if (task.group == group) {
@@ -442,7 +442,7 @@ abstract base class BaseDownloader {
         ),
       );
     }
-    final pausedTasks = await getPausedTasks();
+    final pausedTasks = await _pausedTasksOrEmpty('allTasks');
     tasks.addAll(
       pausedTasks.where((task) => allGroups ? true : task.group == group),
     );
@@ -471,7 +471,7 @@ abstract base class BaseDownloader {
       (taskId) => !matchingTaskIdsWaitingToRetry.contains(taskId),
     );
     // cancel paused tasks
-    final pausedTasks = await getPausedTasks();
+    final pausedTasks = await _pausedTasksOrEmpty('cancelTasksWithIds');
     final pausedTaskIdsToCancel = pausedTasks
         .where((task) => remainingTaskIds.contains(task.taskId))
         .map((e) => e.taskId);
@@ -559,7 +559,7 @@ abstract base class BaseDownloader {
       return tasksWaitingToRetry.where((task) => task.taskId == taskId).first;
     } on StateError {
       try {
-        final pausedTasks = await getPausedTasks();
+        final pausedTasks = await _pausedTasksOrEmpty('taskForId');
         return pausedTasks.where((task) => task.taskId == taskId).first;
       } on StateError {
         return null;
@@ -745,6 +745,31 @@ abstract base class BaseDownloader {
 
   /// Return a list of paused [Task] objects
   Future<List<Task>> getPausedTasks() => _storage.retrieveAllPausedTasks();
+
+  /// [DLCT] Return the paused [Task] objects, or an empty list if the paused
+  /// task store cannot be read
+  ///
+  /// Used by [allTasks], [cancelTasksWithIds], [taskForId] and [reset], whose
+  /// platform overrides query or act on the platform only after this read. A
+  /// failing store (e.g. on iOS a file-permission error after the OS
+  /// terminated the app) must not prevent that platform call, so the failure
+  /// is logged as a warning and treated as "no paused tasks". The error is
+  /// caught untyped because [LocalStorePersistentStorage] forwards errors from
+  /// its background isolate as strings, and other [PersistentStorage]
+  /// implementations may throw any type.
+  Future<List<Task>> _pausedTasksOrEmpty(String operation) async {
+    try {
+      return await getPausedTasks();
+    } catch (e, stackTrace) {
+      log.warning(
+        'Could not read paused tasks during $operation; continuing without '
+        'them: $e',
+        e,
+        stackTrace,
+      );
+      return <Task>[];
+    }
+  }
 
   /// Remove paused task for this taskId, or all if null
   Future<void> removePausedTask([String? taskId]) =>

@@ -541,7 +541,12 @@ public class UrlSessionDelegate : NSObject, URLSessionDelegate, URLSessionDownlo
         } else {
             os_log("Not using proxy for any task", log: log, type: .info)
         }
-        UrlSessionDelegate.urlSession = URLSession(configuration: config, delegate: UrlSessionDelegate.instance, delegateQueue: nil)
+        let session = URLSession(configuration: config, delegate: UrlSessionDelegate.instance, delegateQueue: nil)
+        UrlSessionDelegate.urlSession = session
+        // [DLCT] (Re)creating the background session reconnects the app to tasks
+        // that survived in nsurlsessiond; cancel any the app's required
+        // metaData flags veto before they continue
+        cancelTasksVetoedByRequiredMetaDataFlags(in: session)
     }
     
     /// Return all tasks in this urlSession

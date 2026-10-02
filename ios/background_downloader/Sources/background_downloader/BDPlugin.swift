@@ -72,6 +72,14 @@ public class BDPlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDelegate
         }
         UriUtilsMethodCallHelper.register(with: registrar) // not a real plugin, but has a methodCallHandler
         requireWiFi = RequireWiFi(rawValue: UserDefaults.standard.integer(forKey: BDPlugin.keyRequireWiFi))!
+        // [DLCT] If the app declares required metaData flags, create the
+        // background session now (instead of on the first Dart call) so tasks
+        // that survived in nsurlsessiond are checked and vetoed ones canceled
+        // at launch, before any Dart code runs. Apps without a declaration keep
+        // the lazy session creation.
+        if RequiredMetaDataFlags.fromInfoPlist != .none {
+            UrlSessionDelegate.createUrlSession()
+        }
     }
     
     @objc
@@ -183,6 +191,10 @@ public class BDPlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDelegate
                 postResult(result: result, value: false)
                 return
             }
+            if isVetoedByRequiredMetaDataFlag(task: task) {
+                postResult(result: result, value: false)
+                return
+            }
             guard validateUrl(task) != nil else
             {
                 os_log("Invalid url: %@", log: log, type: .info, task.url)
@@ -225,6 +237,10 @@ public class BDPlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDelegate
                         results.append(success)
                     } else {
                         // Add to holding queue
+                        if isVetoedByRequiredMetaDataFlag(task: task) {
+                            results.append(false)
+                            continue
+                        }
                         guard validateUrl(task) != nil else {
                             os_log("Invalid url: %@", log: log, type: .info, task.url)
                             results.append(false)
@@ -252,6 +268,13 @@ public class BDPlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDelegate
         guard let task = taskFrom(jsonString: taskJsonString)
         else {
             os_log("Could not decode %@ to Task", log: log, taskJsonString)
+            return false
+        }
+        // [DLCT] Refuse a task vetoed by the app's required metaData flags before
+        // any file access (skip-existing check, multipart temp file) or scheduling.
+        // Every native schedule passes here: direct enqueue, enqueueAll, the
+        // HoldingQueue, WiFi re-enqueue and notification resume.
+        if isVetoedByRequiredMetaDataFlag(task: task) {
             return false
         }
         // Check if the file should be skipped

@@ -59,7 +59,7 @@ To use the UIDT service on Android 14+, you must add the following to your `Andr
 
 ### Metadata and displayName
 
-`metaData` and `displayName` can be added to a `Task`. They are ignored by the downloader but may be helpful when receiving an update about the task, and can be shown in notifications using `{metaData}` or `{displayName}`.
+`metaData` and `displayName` can be added to a `Task`. They are ignored by the downloader but may be helpful when receiving an update about the task, and can be shown in notifications using `{metaData}` or `{displayName}`. The one exception (DLCT fork): if the app declares [required metaData flags](CONFIG.md#required-metadata-flags-dlct-fork) for a task's group, the downloader reads `metaData` to decide whether that task may run.
 
 ## UploadTask
 

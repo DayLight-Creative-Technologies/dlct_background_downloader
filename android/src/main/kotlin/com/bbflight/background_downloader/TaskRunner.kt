@@ -463,6 +463,22 @@ open class TaskRunner(
         runInForegroundFileSize =
             prefs.getInt(BDPlugin.keyConfigForegroundFileSize, -1)
         withContext(Dispatchers.IO) {
+            // [DLCT] Required-metaData-flag veto. Every execution host
+            // (WorkManager TaskWorker, UIDTJobService) runs a task only through
+            // this method, so checking here, before the beforeTaskStart
+            // callback, getModifiedTask, any file access or network request,
+            // covers newly enqueued, holding-queue, WorkManager-rescheduled
+            // and UIDT work alike.
+            val requiredFlags = RequiredMetaDataFlags.fromManifest(context.appContext)
+            if (RequiredMetaDataFlags.isVetoed(task.group, task.metaData, requiredFlags)) {
+                Log.w(
+                    TAG,
+                    "TaskId ${task.taskId} in group ${task.group} canceled: required metaData flag missing"
+                )
+                processStatusUpdate(task, TaskStatus.canceled, prefs, context = context.appContext)
+                BDPlugin.holdingQueue?.taskFinished(task)
+                return@withContext // task vetoed
+            }
             CoroutineScope(Dispatchers.Default).launch {
                 delay(taskTimeoutMillis)
                 isTimedOut = true

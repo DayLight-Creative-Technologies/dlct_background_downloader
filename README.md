@@ -6,7 +6,18 @@ This is a fork maintained by **DayLight Creative Technologies** (Steven Day).
 
 ### Changes from upstream
 
+Full detail per release is in [CHANGELOG.md](CHANGELOG.md) (`-dlct.N` entries).
+
 - Added `@unchecked Sendable` conformance to `ParallelDownloader` for Swift 6 strict concurrency compatibility. The class manages thread safety via `BDPlugin.propertyLock` and `URLSession` delegate queues.
+- iOS: `Auth` is applied at enqueue time, and native callbacks (`beforeTaskStart`, `onTaskStart`, `onAuth`) are reachable again; task-record persistence tolerates storage failures.
+- Upload/download notifications are suppressed while the host app is in the foreground.
+- Android build uses Flutter's built-in Kotlin support.
+- **Required metaData flags**: an app can declare, per task group, a `metaData` key that must be the JSON boolean `true` for a task to run. Tasks missing it are vetoed natively, before any file access or network request, including tasks started by WorkManager or surviving in an iOS background session before any Dart code runs. Declare it as `group=key` pairs, e.g. `mediaUploads=scrubbedUpload`:
+  - Android `AndroidManifest.xml`, under `<application>`: `<meta-data android:name="com.bbflight.background_downloader.required_metadata_flags" android:value="mediaUploads=scrubbedUpload" />`
+  - iOS `Info.plist`: `<key>BDRequiredMetaDataFlags</key><string>mediaUploads=scrubbedUpload</string>`
+
+  See [Required metaData flags](doc/CONFIG.md#required-metadata-flags-dlct-fork) for the exact rules.
+- A failure to read the paused-task store no longer prevents `allTasks`, `cancelTasksWithIds`, `taskForId` and `reset` from reaching the native side.
 
 ---
 

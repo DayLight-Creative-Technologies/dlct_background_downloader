@@ -57,6 +57,34 @@ On Android and iOS, most configurations are stored in native 'shared preferences
 
 A configuration can be called multiple times, and affects all tasks *running* after the configuration call. Tasks enqueued _before_ a call, that run _after_ the call (e.g. because they are waiting for other downloads to complete) will run under the newly set configuration, not the one that was active when they were enqueued. On iOS, configuration of requestTimeout, resourceTimeout and proxy can only be set once, before the first task is executed
 
+# Required metaData flags (DLCT fork)
+
+[Android, iOS] An app can require that tasks in specific groups carry a flag in their `metaData` before they are allowed to run. This is a native declaration, not a `configure` call, because it must be enforced before any Dart code runs: on Android, WorkManager can start a previously enqueued task when the process starts, and on iOS, background `URLSession` tasks survive in the system daemon across app updates.
+
+The declaration is a string of comma-separated `group=key` pairs, e.g. `mediaUploads=scrubbedUpload` or `mediaUploads=scrubbedUpload,documents=approved`. A task whose `group` is listed may run only if its `metaData` is a JSON object whose value for that group's `key` is the JSON boolean `true`. The string `"true"`, the number `1`, a missing key or `metaData` that is not a JSON object all count as missing. Tasks in unlisted groups, and all tasks in apps without a declaration, behave exactly as before.
+
+Android: add to the `<application>` element of your `AndroidManifest.xml` (use `android:value`, not `android:resource`):
+```xml
+<meta-data
+    android:name="com.bbflight.background_downloader.required_metadata_flags"
+    android:value="mediaUploads=scrubbedUpload" />
+```
+
+iOS: add to your `Info.plist`:
+```xml
+<key>BDRequiredMetaDataFlags</key>
+<string>mediaUploads=scrubbedUpload</string>
+```
+
+A task carrying the flag is created by putting it in `metaData`, e.g. `UploadTask(..., group: 'mediaUploads', metaData: jsonEncode({'scrubbedUpload': true}))`.
+
+Enforcement:
+* Android: every task is checked when it starts running, before the `beforeTaskStart` callback, any file access or any network request. This covers newly enqueued tasks, holding queue tasks, tasks rescheduled by WorkManager after a process restart, and UIDT tasks. A vetoed task ends with `TaskStatus.canceled` and is logged (task id and group) with `Log.w`.
+* iOS: `enqueue` and `enqueueAll` return `false` for a vetoed task, before any file access, so it is never scheduled. When the background `URLSession` is created, every task in it is checked and vetoed tasks are canceled; such a task reports `TaskStatus.canceled`. If a declaration is present the session is created when the plugin registers at app launch, instead of on the first call from Dart. A task in the session whose stored task data cannot be decoded is canceled as well, because it cannot be shown to be outside a listed group.
+* A declaration that is present but malformed (an entry that is not exactly `group=key`, an empty group or key, a group listed twice, a value that is not a string, or no entries at all) makes the plugin veto every task and log an error, so the mistake is visible immediately instead of silently disabling the check. A missing or blank declaration means no flags are required.
+
+Limits on iOS: a task that was already transferring in the system daemon before your app launched has done so outside the app's control; the check cancels it as soon as the app creates the session, but bytes already sent cannot be recalled.
+
 # Android external storage
 
 Android has a complex storage model, see [here](https://developer.android.com/training/data-storage), that allows you to store App-Specific files in internal or external storage, and also offers Shared Storage.  For Shared Storage you can use `FileDownloader().moveToSharedStorage` - this does not require configuration, and won't be covered here.
