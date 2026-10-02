@@ -513,6 +513,27 @@ public class UrlSessionDelegate : NSObject, URLSessionDelegate, URLSessionDownlo
     /// Configures defaultResourceTimeout, defaultRequestTimeout and proxy based on configuration parameters,
     /// or defaults
     static func createUrlSession() -> Void {
+        // [DLCT] Every caller is a point where the session is created lazily
+        // when there is no required-flags declaration (a call from Dart, work
+        // that Dart scheduled, or the OS relaunching the app for session
+        // events), so from here updates may flow to Dart once its background
+        // handler is confirmed
+        if UndeliveredStore.shared.demandDelivery() {
+            os_log("Dart is ready for background channel updates", log: log, type: .info)
+            sendPostsAwaitingDart()
+        }
+        createUrlSessionIfNeeded()
+    }
+
+    /// [DLCT] Creates the session at plugin registration, when the app declares
+    /// required metaData flags, without asking for updates to flow to Dart:
+    /// until Dart is ready they are stored and replayed by
+    /// `resumeFromBackground`
+    static func createUrlSessionAtRegistration() -> Void {
+        createUrlSessionIfNeeded()
+    }
+
+    private static func createUrlSessionIfNeeded() -> Void {
         if UrlSessionDelegate.urlSession != nil {
             return
         }

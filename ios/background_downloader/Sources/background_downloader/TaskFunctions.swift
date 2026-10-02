@@ -431,14 +431,16 @@ func processStatusUpdate(task: Task, status: TaskStatus, taskException: TaskExce
         : TaskStatusUpdate(task: task, taskStatus: status)
     if providesStatusUpdates(downloadTask: task) || retryNeeded {
         let arg = statusUpdate.argList()
-        if !postOnBackgroundChannel(method: "statusUpdate", task: task, arg: arg) {
-            // store update locally as a merged task/status JSON string, without error info
+        // if not delivered, store update locally as a merged task/status JSON string, without error info
+        let undelivered = UndeliveredItem(prefsKey: BDPlugin.keyStatusUpdateMap, taskId: task.taskId, encode: {
             guard let jsonData = try? JSONEncoder().encode(statusUpdate)
             else {
                 os_log("Could not store status update locally", log: log, type: .debug)
-                return }
-            storeLocally(prefsKey: BDPlugin.keyStatusUpdateMap, taskId: task.taskId, item: jsonData)
-        }
+                return nil
+            }
+            return jsonData
+        })
+        _ = postOnBackgroundChannel(method: "statusUpdate", task: task, arg: arg, undelivered: undelivered)
     }
     if isFinalState(status: status) {
         // remove references to this task that are no longer needed
@@ -470,14 +472,16 @@ func processStatusUpdate(task: Task, status: TaskStatus, taskException: TaskExce
 /// Sends progress update via the background channel to Dart, if requested
 func processProgressUpdate(task: Task, progress: Double, expectedFileSize: Int64 = -1, networkSpeed: Double = -1.0, timeRemaining: TimeInterval = -1.0) {
     if providesProgressUpdates(task: task) {
-        if (!postOnBackgroundChannel(method: "progressUpdate", task: task, arg: [progress, expectedFileSize, networkSpeed, Int(timeRemaining * 1000.0)] as [Any])) {
-            // store update locally as a merged task/progress JSON string
+        // if not delivered, store update locally as a merged task/progress JSON string
+        let undelivered = UndeliveredItem(prefsKey: BDPlugin.keyProgressUpdateMap, taskId: task.taskId, encode: {
             guard let jsonData = try? JSONEncoder().encode(TaskProgressUpdate(task: task, progress: progress, expectedFileSize: expectedFileSize))
             else {
                 os_log("Could not store progress update locally", log: log, type: .info)
-                return }
-            storeLocally(prefsKey: BDPlugin.keyProgressUpdateMap, taskId: task.taskId, item: jsonData)
-        }
+                return nil
+            }
+            return jsonData
+        })
+        _ = postOnBackgroundChannel(method: "progressUpdate", task: task, arg: [progress, expectedFileSize, networkSpeed, Int(timeRemaining * 1000.0)] as [Any], undelivered: undelivered)
     }
 }
 
@@ -499,15 +503,16 @@ func processResumeData(task: Task, resumeData: Data) -> Bool {
     BDPlugin.propertyLock.withLock {
         BDPlugin.localResumeData[task.taskId] = resumeDataAsBase64String
     }
-    if !postOnBackgroundChannel(method: "resumeData", task: task, arg: resumeDataAsBase64String) {
-        // store resume data locally
+    // if not delivered, store resume data locally
+    let undelivered = UndeliveredItem(prefsKey: BDPlugin.keyResumeDataMap, taskId: task.taskId, encode: {
         guard let jsonData = try? JSONEncoder().encode(ResumeData(task: task, data: resumeDataAsBase64String))
         else {
             os_log("Could not store resume data locally", log: log, type: .info)
-            return false}
-        storeLocally(prefsKey: BDPlugin.keyResumeDataMap, taskId: task.taskId, item: jsonData)
-    }
-    return true
+            return nil
+        }
+        return jsonData
+    })
+    return postOnBackgroundChannel(method: "resumeData", task: task, arg: resumeDataAsBase64String, undelivered: undelivered) != .notDelivered
 }
 
 /// Return the background channel for cummincation to Dart side, or nil
@@ -519,17 +524,56 @@ func getBackgroundChannel() -> FlutterMethodChannel? {
     return channel
 }
 
-/// Post method message on backgroundChannel with arguments and return true if this was successful
+/// Post method message on backgroundChannel with arguments and return true if
+/// it was delivered (or, from the main thread, dispatched)
+///
+/// [arg] can be a list or a single variable.
+/// For messages with no local store to fall back on; status, progress and
+/// resume data updates use the variant with `undelivered`
+func postOnBackgroundChannel(method: String, task: Task, arg: Any) -> Bool {
+    switch postOnBackgroundChannel(method: method, task: task, arg: arg, undelivered: nil) {
+    case .delivered, .dispatched:
+        return true
+    case .storedLocally, .notDelivered:
+        return false
+    }
+}
+
+/// Outcome of a post on the background channel
+enum BackgroundPostOutcome: Equatable {
+    /// Dart confirmed the message with `true`
+    case delivered
+    /// Posted from the main thread, which cannot wait for the reply: if the
+    /// reply does not confirm delivery the update is stored locally then, and
+    /// a message with nothing to store is held until Dart is ready
+    case dispatched
+    /// Not delivered; the update was stored locally for replay by
+    /// `resumeFromBackground`
+    case storedLocally
+    /// Not delivered and not stored
+    case notDelivered
+}
+
+/// [DLCT] Post method message on backgroundChannel with arguments, storing
+/// [undelivered] locally if the message is not delivered
+///
+/// Delivered means the Dart handler replied with exactly `true`
+/// (`BackgroundChannelDelivery.isDeliveredReply`). Until Dart is ready
+/// (`UndeliveredStore.isDartReady`) nothing is posted: the update is stored
+/// locally. Off the main thread the post waits at most
+/// `BackgroundChannelDelivery.replyTimeout` for the reply; a timeout stores
+/// the update, and a confirming reply that arrives later removes that stored
+/// copy again so it is not replayed as well.
 ///
 /// [arg] can be a list or a single variable
-func postOnBackgroundChannel(method: String, task:Task, arg: Any) -> Bool {
+func postOnBackgroundChannel(method: String, task: Task, arg: Any, undelivered: UndeliveredItem?) -> BackgroundPostOutcome {
     guard let channel = BDPlugin.backgroundChannel else {
         os_log("Could not find background channel", log: log, type: .error)
-        return false
+        return storeUndelivered(undelivered)
     }
     guard let jsonString = jsonStringFor(task: task) else {
         os_log("Could not convert task to JSON", log: log, type: .error)
-        return false
+        return storeUndelivered(undelivered)
     }
     var argsList: [Any?] = [jsonString]
     if arg is [Any?] {
@@ -537,39 +581,103 @@ func postOnBackgroundChannel(method: String, task:Task, arg: Any) -> Bool {
     } else {
         argsList.append(arg)
     }
-    if Thread.isMainThread {
+    if Thread.isMainThread && undelivered == nil {
+        // Nothing to store: send once Dart is ready, in order with any
+        // messages already held for that moment
         DispatchQueue.main.async {
-            channel.invokeMethod(method, arguments: argsList)
+            if UndeliveredStore.shared.isDartReady && BDPlugin.postsAwaitingDart.isEmpty {
+                channel.invokeMethod(method, arguments: argsList)
+            } else {
+                BDPlugin.postsAwaitingDart.append((method: method, arguments: argsList))
+            }
         }
-        return true
+        return .dispatched
     }
-    var success = false
-    updatesQueue.sync {
-        let dispatchGroup = DispatchGroup()
-        dispatchGroup.enter()
+    switch UndeliveredStore.shared.storeUnlessDartReady(undelivered) {
+    case .stored:
+        os_log("Dart not ready: stored %{public}@ for taskId %@", log: log, type: .debug, method, task.taskId)
+        return .storedLocally
+    case .notStored:
+        os_log("Dart not ready: could not deliver %{public}@ for taskId %@", log: log, type: .info, method, task.taskId)
+        return .notDelivered
+    case .dartReady:
+        break
+    }
+    if Thread.isMainThread {
+        // The main thread must not block on the reply
         DispatchQueue.main.async {
-            channel.invokeMethod(method, arguments: argsList, result: {(r: Any?) -> () in
-                success = !(r is FlutterError)
-                if BDPlugin.forceFailPostOnBackgroundChannel {
-                    success = false
+            channel.invokeMethod(method, arguments: argsList, result: {(reply: Any?) -> () in
+                if isDeliveredOnBackgroundChannel(reply: reply) {
+                    removeSupersededUndelivered(undelivered)
+                } else {
+                    _ = storeUndelivered(undelivered)
                 }
-                dispatchGroup.leave()
             })
         }
-        dispatchGroup.wait()
+        return .dispatched
     }
-    return success
+    var outcome = BackgroundReplySlot.Outcome.timedOut(nil)
+    updatesQueue.sync {
+        let slot = BackgroundReplySlot()
+        DispatchQueue.main.async {
+            channel.invokeMethod(method, arguments: argsList, result: {(reply: Any?) -> () in
+                if let storedAfterTimeout = slot.receive(reply, confirmsDelivery: isDeliveredOnBackgroundChannel(reply: reply)) {
+                    // Dart processed it after the timeout: drop the stored copy
+                    UndeliveredStore.shared.removeIfUnchanged(storedAfterTimeout)
+                }
+            })
+        }
+        outcome = slot.wait(timeout: BackgroundChannelDelivery.replyTimeout, storeOnTimeout: {
+            UndeliveredStore.shared.store(undelivered)
+        })
+    }
+    switch outcome {
+    case .replied(let reply):
+        if isDeliveredOnBackgroundChannel(reply: reply) {
+            removeSupersededUndelivered(undelivered)
+            return .delivered
+        }
+        return storeUndelivered(undelivered)
+    case .timedOut(let stored):
+        os_log("No reply from Dart within timeout for %{public}@ for taskId %@", log: log, type: .info, method, task.taskId)
+        return stored == nil ? .notDelivered : .storedLocally
+    }
 }
 
-/// Store the [item] in preferences under [prefsKey], keyed by [taskId]
+/// True if Dart's [reply] to a post made while Dart was ready confirms delivery
+private func isDeliveredOnBackgroundChannel(reply: Any?) -> Bool {
+    return !BackgroundChannelDelivery.shouldStoreLocally(dartReady: true, replied: true, reply: reply,
+                                                         forceFail: BDPlugin.forceFailPostOnBackgroundChannel)
+}
+
+/// Stores [undelivered] locally, if there is one, and returns the outcome
+private func storeUndelivered(_ undelivered: UndeliveredItem?) -> BackgroundPostOutcome {
+    return UndeliveredStore.shared.store(undelivered) == nil ? .notDelivered : .storedLocally
+}
+
+/// After a live delivery, removes an older stored update of the same kind for
+/// the same task so `resumeFromBackground` does not replay it afterwards
+private func removeSupersededUndelivered(_ undelivered: UndeliveredItem?) {
+    if let undelivered = undelivered {
+        UndeliveredStore.shared.removeSuperseded(prefsKey: undelivered.prefsKey, taskId: undelivered.taskId)
+    }
+}
+
+/// Sends the main-thread messages held while Dart was not ready, in order.
 ///
-/// [item] is a JsonEncoded Data object
-func storeLocally(prefsKey: String, taskId: String,
-                  item: Data) {
-    let defaults = UserDefaults.standard
-    var map = defaults.dictionary(forKey: prefsKey) ?? [:]
-    map[taskId] = String(data: item, encoding: .utf8)
-    defaults.set(map, forKey: prefsKey)
+/// Called whenever `UndeliveredStore` reports that Dart became ready
+func sendPostsAwaitingDart() {
+    DispatchQueue.main.async {
+        let posts = BDPlugin.postsAwaitingDart
+        BDPlugin.postsAwaitingDart.removeAll()
+        guard let channel = BDPlugin.backgroundChannel else {
+            os_log("Could not find background channel", log: log, type: .error)
+            return
+        }
+        for post in posts {
+            channel.invokeMethod(post.method, arguments: post.arguments)
+        }
+    }
 }
 
 /// Returns a JSON string for this Task, or nil

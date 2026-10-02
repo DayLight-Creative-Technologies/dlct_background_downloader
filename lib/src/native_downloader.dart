@@ -29,19 +29,40 @@ abstract base class NativeDownloader extends BaseDownloader {
 
   late final SerialJobQueue<MethodCall, dynamic> _jobQueue;
 
+  /// [DLCT] Completes once the background channel handler is set and confirmed
+  /// to the native side (see [confirmBackgroundHandler]), or initialization
+  /// failed. [popUndeliveredData] waits for it, so updates the native side
+  /// stored before the handler existed are popped only after it does.
+  final _backgroundHandlerConfirmed = Completer<void>();
+
   /// Initializes the background channel and starts listening for messages from
   /// the native side
   @override
   Future<void> initialize() async {
-    await super.initialize();
-    WidgetsFlutterBinding.ensureInitialized();
-    // listen to the background channel, receiving updates on download status
-    // or progress.
-    // The job queue ensures that messages are processed in order, even though
-    // the processing itself is asynchronous (using [compute])
-    _jobQueue = SerialJobQueue(_handleBackgroundMessage);
-    _backgroundChannel.setMethodCallHandler(_jobQueue.add);
+    try {
+      await super.initialize();
+      WidgetsFlutterBinding.ensureInitialized();
+      // listen to the background channel, receiving updates on download status
+      // or progress.
+      // The job queue ensures that messages are processed in order, even though
+      // the processing itself is asynchronous (using [compute])
+      _jobQueue = SerialJobQueue(_handleBackgroundMessage);
+      _backgroundChannel.setMethodCallHandler(_jobQueue.add);
+      await confirmBackgroundHandler();
+    } finally {
+      if (!_backgroundHandlerConfirmed.isCompleted) {
+        _backgroundHandlerConfirmed.complete();
+      }
+    }
   }
+
+  /// [DLCT] Tells the native side that the background channel handler is set.
+  ///
+  /// Called by [initialize] right after the handler is set. The default does
+  /// nothing: on Android an update the handler does not confirm is stored
+  /// locally by the native side anyway.
+  @protected
+  Future<void> confirmBackgroundHandler() async {}
 
   /// Handles the background message
   ///
@@ -424,8 +445,12 @@ abstract base class NativeDownloader extends BaseDownloader {
   /// ResumeData has a [ResumeData] json representation
   /// StatusUpdates has a mixed Task & TaskStatus json representation 'taskStatus'
   /// ProgressUpdates has a mixed Task & double json representation 'progress'
+  ///
+  /// [DLCT] Waits until the background channel handler is confirmed, so that
+  /// on iOS everything stored before Dart was ready is in this pop
   @override
   Future<Map<String, String>> popUndeliveredData(Undelivered dataType) async {
+    await _backgroundHandlerConfirmed.future;
     final String jsonString = await switch (dataType) {
       Undelivered.resumeData => methodChannel.invokeMethod('popResumeData'),
       Undelivered.statusUpdates => methodChannel.invokeMethod(
@@ -762,6 +787,22 @@ final class IOSDownloader extends NativeDownloader {
   Future<void> initialize() async {
     initCallbackDispatcher();
     return super.initialize();
+  }
+
+  /// [DLCT] Until the native side receives `backgroundChannelReady` it stores
+  /// status, progress and resume data updates locally instead of posting them
+  /// (BDPlugin.register, TaskFunctions.postOnBackgroundChannel)
+  @override
+  Future<void> confirmBackgroundHandler() async {
+    try {
+      await NativeDownloader._backgroundChannel.invokeMethod<bool>(
+        'backgroundChannelReady',
+      );
+    } on MissingPluginException {
+      // The native side tracks the background channel of the first engine
+      // only (BDPlugin.register); in any other engine nothing listens for this
+      log.fine('Background channel not tracked for this engine');
+    }
   }
 
   @override

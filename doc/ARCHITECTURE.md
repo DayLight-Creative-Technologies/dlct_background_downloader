@@ -79,7 +79,7 @@ The iOS implementation is written in Swift and resides in `ios/background_downlo
 
 *   When a task is enqueued, a `URLSessionDownloadTask` (or `UploadTask`) is created.
 *   The `Task` object is serialized to JSON and stored in the `taskDescription` of the `URLSessionTask` (or managed separately if too large).
-*   Progress and Status updates are sent back to Dart via the `backgroundChannel`.
+*   Progress and Status updates are sent back to Dart via the `backgroundChannel`. An update counts as delivered only if the Dart handler replies `true` within 2 seconds; otherwise status, progress and resume data updates are stored in `UserDefaults` and replayed by `resumeFromBackground`. Until Dart is ready (its background handler confirmed with `backgroundChannelReady` from `NativeDownloader.initialize`, and the app has called `resumeFromBackground` or a method that uses the `URLSession`) updates are stored without being posted (`BackgroundChannelDelivery.swift`).
 
 ## Desktop Implementation
 

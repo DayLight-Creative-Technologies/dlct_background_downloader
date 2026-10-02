@@ -50,7 +50,10 @@ public class BDPlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDelegate
     static var mimeTypes = [String : String]() // [taskId : mimeType]
     static var charSets = [String : String]() // [taskId : charSet]
     static var holdingQueue: HoldingQueue? = nil
-    
+    /// [DLCT] Main-thread background channel messages with no local store,
+    /// held until Dart is ready (main thread only)
+    static var postsAwaitingDart = [(method: String, arguments: [Any?])]()
+
     static var propertyLock: NSLock = NSLock() // used to synchronize access to static properties
     
     public static var backgroundChannel: FlutterMethodChannel? // for native <-> plugin comms
@@ -68,6 +71,20 @@ public class BDPlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDelegate
             // be the Flutter main isolate.
             // For full feature parity with Android see #382
             backgroundChannel = FlutterMethodChannel(name: "com.bbflight.background_downloader.background", binaryMessenger: registrar.messenger())
+            // [DLCT] Dart sends `backgroundChannelReady` on this channel right
+            // after setting its background handler (NativeDownloader.initialize),
+            // so the call arrives only from the isolate that set it
+            backgroundChannel?.setMethodCallHandler({ (call: FlutterMethodCall, result: @escaping FlutterResult) in
+                guard call.method == "backgroundChannelReady" else {
+                    result(FlutterMethodNotImplemented)
+                    return
+                }
+                if UndeliveredStore.shared.confirmDartHandler() {
+                    os_log("Dart is ready for background channel updates", log: log, type: .info)
+                    sendPostsAwaitingDart()
+                }
+                result(true)
+            })
             BDPlugin.callbackChannel = callbackChannel
         }
         UriUtilsMethodCallHelper.register(with: registrar) // not a real plugin, but has a methodCallHandler
@@ -75,10 +92,12 @@ public class BDPlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDelegate
         // [DLCT] If the app declares required metaData flags, create the
         // background session now (instead of on the first Dart call) so tasks
         // that survived in nsurlsessiond are checked and vetoed ones canceled
-        // at launch, before any Dart code runs. Apps without a declaration keep
-        // the lazy session creation.
+        // at launch, before any Dart code runs. Updates the session reports
+        // before Dart is ready are stored locally and replayed by
+        // resumeFromBackground. Apps without a declaration keep the lazy
+        // session creation.
         if RequiredMetaDataFlags.fromInfoPlist != .none {
-            UrlSessionDelegate.createUrlSession()
+            UrlSessionDelegate.createUrlSessionAtRegistration()
         }
     }
     
@@ -750,9 +769,17 @@ public class BDPlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDelegate
     }
     
     /// Pops and returns locally stored map for this key as a JSON String, via the FlutterResult
+    ///
+    /// [DLCT] Popping also asks for updates to flow to Dart from now on; the
+    /// pop and that switch happen under one lock, so every update stored
+    /// because Dart was not ready is in this or a following pop
     private func popLocalStorage(key: String, result: @escaping FlutterResult) {
-        let defaults = UserDefaults.standard
-        guard let map = defaults.dictionary(forKey: key),
+        let (storedMap, becameReady) = UndeliveredStore.shared.pop(prefsKey: key)
+        if becameReady {
+            os_log("Dart is ready for background channel updates", log: log, type: .info)
+            sendPostsAwaitingDart()
+        }
+        guard let map = storedMap,
               let jsonData = try? JSONSerialization.data(withJSONObject: map),
               let jsonString = String(data: jsonData, encoding: .utf8)
         else {
@@ -760,7 +787,6 @@ public class BDPlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDelegate
             result("{}")
             return
         }
-        defaults.removeObject(forKey: key)
         result(jsonString)
         return
     }
