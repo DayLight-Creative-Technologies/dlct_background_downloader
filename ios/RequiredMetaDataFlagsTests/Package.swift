@@ -10,8 +10,9 @@
 // rest of its sources import Flutter; `PluginSymbols.swift` supplies the three
 // plugin symbols the veto file references (`log`, `Task`, `getTaskFrom`).
 //
-// Run with `swift test` from this directory (macOS). CI: the `Native veto
-// tests (iOS)` job in `.github/workflows/build.yml`.
+// Run with `swift test` from this directory (macOS). CI: the `Native unit
+// tests (iOS)` job in `.github/workflows/build.yml`, which runs only when a
+// run is dispatched by hand (see the note at the top of that file).
 
 import PackageDescription
 

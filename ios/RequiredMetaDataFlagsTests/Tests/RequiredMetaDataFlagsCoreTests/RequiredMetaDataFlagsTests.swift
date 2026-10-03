@@ -135,4 +135,67 @@ final class RequiredMetaDataFlagsTests: XCTestCase {
         XCTAssertTrue(isVetoed("avatars", #"{"scrubbed":true}"#, twoGroups))
         XCTAssertFalse(isVetoed("default", "", twoGroups))
     }
+
+    // MARK: fromInfoPlistValue — the Info.plist value as fromInfoPlist hands it over
+
+    func testAbsentInfoPlistValueIsNone() {
+        XCTAssertEqual(RequiredMetaDataFlags.fromInfoPlistValue(nil), RequiredMetaDataFlags.none)
+    }
+
+    func testInfoPlistValueThatIsNotAStringFailsClosed() {
+        for value: Any in [true, 1, ["mediaUploads": "scrubbed"], ["mediaUploads=scrubbed"]] {
+            let flags = RequiredMetaDataFlags.fromInfoPlistValue(value)
+            XCTAssertTrue(isMalformed(flags), "\(value)")
+            XCTAssertTrue(isVetoed("default", #"{"scrubbed":true}"#, flags), "\(value)")
+        }
+    }
+
+    func testInfoPlistStringIsParsed() {
+        XCTAssertEqual(RequiredMetaDataFlags.fromInfoPlistValue("mediaUploads=scrubbed"), declared)
+        XCTAssertTrue(isMalformed(RequiredMetaDataFlags.fromInfoPlistValue("mediaUploads")))
+        XCTAssertEqual(RequiredMetaDataFlags.fromInfoPlistValue(" "), RequiredMetaDataFlags.none)
+    }
+
+    // MARK: isTaskVetoed — the decision doEnqueue takes for a task
+
+    private func task(_ group: String, _ metaData: String, taskId: String = "veto-test") -> Task {
+        return Task(taskId: taskId, group: group, metaData: metaData)
+    }
+
+    func testAnInfoPlistDeclaringTheGroupVetoesAnUnmarkedTaskAndRunsAMarkedOne() {
+        let flags = RequiredMetaDataFlags.fromInfoPlistValue("mediaUploads=scrubbed")
+        XCTAssertTrue(RequiredMetaDataFlags.isTaskVetoed(task("mediaUploads", #"{"uuid":"u1"}"#), flags: flags))
+        XCTAssertTrue(RequiredMetaDataFlags.isTaskVetoed(task("mediaUploads", ""), flags: flags))
+        XCTAssertFalse(RequiredMetaDataFlags.isTaskVetoed(task("mediaUploads", #"{"uuid":"u1","scrubbed":true}"#), flags: flags))
+        XCTAssertFalse(RequiredMetaDataFlags.isTaskVetoed(task("default", ""), flags: flags))
+    }
+
+    func testTheTasksOwnGroupAndMetaDataDecideNotItsId() {
+        let flags = RequiredMetaDataFlags.fromInfoPlistValue("mediaUploads=scrubbed")
+        XCTAssertTrue(RequiredMetaDataFlags.isTaskVetoed(task("mediaUploads", "{}", taskId: "default"), flags: flags))
+        XCTAssertFalse(RequiredMetaDataFlags.isTaskVetoed(task("default", "{}", taskId: "mediaUploads"), flags: flags))
+        XCTAssertFalse(RequiredMetaDataFlags.isTaskVetoed(task("mediaUploads", #"{"scrubbed":true}"#, taskId: "{}"), flags: flags))
+    }
+
+    // MARK: cancelsAtSessionCreation — which reconnected session tasks are canceled
+
+    func testSessionCreationCancelsVetoedAndUndecodableTasksOnly() {
+        let flags = RequiredMetaDataFlags.fromInfoPlistValue("mediaUploads=scrubbed")
+        XCTAssertTrue(RequiredMetaDataFlags.cancelsAtSessionCreation(task("mediaUploads", "{}"), flags: flags))
+        XCTAssertTrue(RequiredMetaDataFlags.cancelsAtSessionCreation(nil, flags: flags))
+        XCTAssertFalse(RequiredMetaDataFlags.cancelsAtSessionCreation(task("mediaUploads", #"{"scrubbed":true}"#), flags: flags))
+        XCTAssertFalse(RequiredMetaDataFlags.cancelsAtSessionCreation(task("default", "{}"), flags: flags))
+    }
+
+    func testSessionCreationCancelsNothingWithoutADeclaration() {
+        let none = RequiredMetaDataFlags.fromInfoPlistValue(nil)
+        XCTAssertFalse(RequiredMetaDataFlags.cancelsAtSessionCreation(nil, flags: none))
+        XCTAssertFalse(RequiredMetaDataFlags.cancelsAtSessionCreation(task("mediaUploads", "{}"), flags: none))
+    }
+
+    func testSessionCreationUnderAMalformedDeclarationCancelsEveryTask() {
+        let malformed = RequiredMetaDataFlags.fromInfoPlistValue(true)
+        XCTAssertTrue(RequiredMetaDataFlags.cancelsAtSessionCreation(nil, flags: malformed))
+        XCTAssertTrue(RequiredMetaDataFlags.cancelsAtSessionCreation(task("default", #"{"scrubbed":true}"#), flags: malformed))
+    }
 }

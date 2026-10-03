@@ -111,6 +111,16 @@ sealed class RequiredMetaDataFlags {
             }
         }
 
+        /**
+         * Returns true if [task] must not run under [flags]: the decision
+         * [TaskRunner.run] takes for every task before doing it. Pure.
+         *
+         * The task's own group and metaData are what [isVetoed] judges.
+         */
+        fun isTaskVetoed(task: Task, flags: RequiredMetaDataFlags): Boolean {
+            return isVetoed(task.group, task.metaData, flags)
+        }
+
         /** True if [metaData] is a JSON object whose [key] holds the JSON boolean `true` */
         private fun hasTrueFlag(metaData: String, key: String): Boolean {
             val element = try {
@@ -157,13 +167,31 @@ sealed class RequiredMetaDataFlags {
             } catch (e: PackageManager.NameNotFoundException) {
                 return Malformed("could not read the app's own manifest: $e")
             }
-            val metaData = applicationInfo.metaData ?: return None
-            if (!metaData.containsKey(MANIFEST_KEY)) {
+            val metaData = applicationInfo.metaData
+            return fromDeclaration(metaData?.containsKey(MANIFEST_KEY) == true) {
+                metaData?.getString(MANIFEST_KEY)
+            }
+        }
+
+        /**
+         * Returns the flags for the manifest meta-data [MANIFEST_KEY]. Pure.
+         *
+         * [isDeclared] is whether the meta-data is present at all; [declaration]
+         * reads its String value, which is null when the value is not a String
+         * (e.g. `android:resource` instead of `android:value`), and is only
+         * called when [isDeclared].
+         *
+         * - absent: [None]
+         * - present but not a String: [Malformed] (fail closed)
+         * - present String: [parse]d
+         */
+        fun fromDeclaration(isDeclared: Boolean, declaration: () -> String?): RequiredMetaDataFlags {
+            if (!isDeclared) {
                 return None
             }
-            val declaration = metaData.getString(MANIFEST_KEY)
+            val value = declaration()
                 ?: return Malformed("value is not a string (use android:value, not android:resource)")
-            return parse(declaration)
+            return parse(value)
         }
     }
 }

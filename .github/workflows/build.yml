@@ -1,5 +1,14 @@
 name: Build the package
 
+# [DLCT] The push and pull_request triggers below have never fired: GitHub
+# keeps a fork's workflows dormant until they are enabled in the repository's
+# Actions tab (SSK gap #859). Every run so far was dispatched by hand:
+#   gh workflow run build.yml --repo DayLight-Creative-Technologies/dlct_background_downloader --ref main
+# SSK does not rely on the triggers: its pre-commit gate #76
+# (scripts/check_fork_ci_green.py) fails unless the pinned commit has a
+# completed, successful run of this workflow in which the "Native unit tests
+# (Android)" and "Native unit tests (iOS)" jobs succeeded. Renaming either job
+# breaks that gate on purpose.
 on:
   workflow_dispatch:
   push:

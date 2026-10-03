@@ -470,7 +470,7 @@ open class TaskRunner(
             // covers newly enqueued, holding-queue, WorkManager-rescheduled
             // and UIDT work alike.
             val requiredFlags = RequiredMetaDataFlags.fromManifest(context.appContext)
-            if (RequiredMetaDataFlags.isVetoed(task.group, task.metaData, requiredFlags)) {
+            if (RequiredMetaDataFlags.isTaskVetoed(task, requiredFlags)) {
                 Log.w(
                     TAG,
                     "TaskId ${task.taskId} in group ${task.group} canceled: required metaData flag missing"

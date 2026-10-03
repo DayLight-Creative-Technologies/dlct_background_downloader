@@ -146,4 +146,68 @@ class RequiredMetaDataFlagsTest {
         assertTrue(RequiredMetaDataFlags.isVetoed("avatars", """{"scrubbed":true}""", twoGroups))
         assertFalse(RequiredMetaDataFlags.isVetoed("default", "", twoGroups))
     }
+
+    // fromDeclaration: the manifest meta-data as readManifest hands it over
+
+    @Test
+    fun `absent manifest meta-data is None and its value is never read`() {
+        var read = false
+        assertEquals(RequiredMetaDataFlags.None, RequiredMetaDataFlags.fromDeclaration(false) { read = true; "mediaUploads=scrubbed" })
+        assertFalse(read)
+    }
+
+    @Test
+    fun `manifest meta-data that is not a String fails closed`() {
+        val flags = RequiredMetaDataFlags.fromDeclaration(true) { null }
+        assertTrue(flags is RequiredMetaDataFlags.Malformed)
+        assertTrue(RequiredMetaDataFlags.isVetoed("default", """{"scrubbed":true}""", flags))
+    }
+
+    @Test
+    fun `manifest meta-data String is parsed`() {
+        assertEquals(declared, RequiredMetaDataFlags.fromDeclaration(true) { "mediaUploads=scrubbed" })
+        assertTrue(RequiredMetaDataFlags.fromDeclaration(true) { "mediaUploads" } is RequiredMetaDataFlags.Malformed)
+        assertEquals(RequiredMetaDataFlags.None, RequiredMetaDataFlags.fromDeclaration(true) { " " })
+    }
+
+    // isTaskVetoed: the decision TaskRunner.run takes for a real Task
+
+    private fun task(group: String, metaData: String, taskId: String = "veto-test") = Task(
+        taskId = taskId,
+        url = "https://example.com/upload",
+        filename = "x.webp",
+        headers = emptyMap(),
+        baseDirectory = BaseDirectory.applicationDocuments,
+        group = group,
+        updates = Updates.status,
+        metaData = metaData,
+        taskType = "UploadTask"
+    )
+
+    @Test
+    fun `a manifest declaring the group vetoes an unmarked task and runs a marked one`() {
+        val flags = RequiredMetaDataFlags.fromDeclaration(true) { "mediaUploads=scrubbed" }
+        assertTrue(RequiredMetaDataFlags.isTaskVetoed(task("mediaUploads", """{"uuid":"u1"}"""), flags))
+        assertTrue(RequiredMetaDataFlags.isTaskVetoed(task("mediaUploads", ""), flags))
+        assertFalse(RequiredMetaDataFlags.isTaskVetoed(task("mediaUploads", """{"uuid":"u1","scrubbed":true}"""), flags))
+        assertFalse(RequiredMetaDataFlags.isTaskVetoed(task("default", ""), flags))
+    }
+
+    @Test
+    fun `the task's own group and metaData decide, not its id`() {
+        val flags = RequiredMetaDataFlags.fromDeclaration(true) { "mediaUploads=scrubbed" }
+        assertTrue(RequiredMetaDataFlags.isTaskVetoed(task("mediaUploads", "{}", taskId = "default"), flags))
+        assertFalse(RequiredMetaDataFlags.isTaskVetoed(task("default", "{}", taskId = "mediaUploads"), flags))
+        assertFalse(
+            RequiredMetaDataFlags.isTaskVetoed(task("mediaUploads", """{"scrubbed":true}""", taskId = """{}"""), flags)
+        )
+    }
+
+    @Test
+    fun `no manifest declaration runs every task, a non-String one vetoes every task`() {
+        val none = RequiredMetaDataFlags.fromDeclaration(false) { null }
+        assertFalse(RequiredMetaDataFlags.isTaskVetoed(task("mediaUploads", ""), none))
+        val notString = RequiredMetaDataFlags.fromDeclaration(true) { null }
+        assertTrue(RequiredMetaDataFlags.isTaskVetoed(task("default", """{"scrubbed":true}"""), notString))
+    }
 }

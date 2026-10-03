@@ -41,21 +41,27 @@ enum RequiredMetaDataFlags: Equatable, Sendable {
     /// The flags declared in the host app's Info.plist, computed once per process
     /// (the Info.plist cannot change while the process is alive)
     static let fromInfoPlist: RequiredMetaDataFlags = {
-        let flags: RequiredMetaDataFlags
-        if let rawValue = Bundle.main.object(forInfoDictionaryKey: infoPlistKey) {
-            if let declaration = rawValue as? String {
-                flags = parse(declaration)
-            } else {
-                flags = .malformed("value is not a String")
-            }
-        } else {
-            flags = .none
-        }
+        let flags = fromInfoPlistValue(Bundle.main.object(forInfoDictionaryKey: infoPlistKey))
         if case .malformed(let reason) = flags {
             os_log("Info.plist key %@ is malformed (%@): every task will be canceled until it is fixed", log: log, type: .error, infoPlistKey, reason)
         }
         return flags
     }()
+
+    /// The flags for the Info.plist value of `infoPlistKey`. Pure.
+    ///
+    /// - absent (`nil`): `.none`
+    /// - present but not a String: `.malformed` (fail closed)
+    /// - present String: `parse`d
+    static func fromInfoPlistValue(_ rawValue: Any?) -> RequiredMetaDataFlags {
+        guard let rawValue = rawValue else {
+            return .none
+        }
+        guard let declaration = rawValue as? String else {
+            return .malformed("value is not a String")
+        }
+        return parse(declaration)
+    }
 
     /// Parses a declaration string. Pure.
     ///
@@ -118,6 +124,32 @@ enum RequiredMetaDataFlags: Equatable, Sendable {
         }
     }
 
+    /// Returns true if `task` must not run under `flags`: the decision
+    /// `doEnqueue` takes for every task. Pure.
+    ///
+    /// The task's own group and metaData are what `isVetoed` judges.
+    static func isTaskVetoed(_ task: Task, flags: RequiredMetaDataFlags) -> Bool {
+        return isVetoed(group: task.group, metaData: task.metaData, flags: flags)
+    }
+
+    /// Returns true if the URLSession task whose stored Task decodes to `task`
+    /// must be canceled when the background session is (re)created under
+    /// `flags`. Pure.
+    ///
+    /// - `.none`: nothing is canceled
+    /// - a stored Task that could not be decoded (`nil`): canceled, because it
+    ///   cannot be shown to be outside a protected group
+    /// - otherwise: canceled if `isTaskVetoed`
+    static func cancelsAtSessionCreation(_ task: Task?, flags: RequiredMetaDataFlags) -> Bool {
+        if flags == .none {
+            return false
+        }
+        guard let task = task else {
+            return true
+        }
+        return isTaskVetoed(task, flags: flags)
+    }
+
     /// True if `metaData` is a JSON object whose `key` holds the JSON boolean `true`
     private static func hasTrueFlag(metaData: String, key: String) -> Bool {
         guard let data = metaData.data(using: .utf8),
@@ -135,7 +167,7 @@ enum RequiredMetaDataFlags: Equatable, Sendable {
 /// Returns true, and logs, if `task` must not be enqueued because the app
 /// declared a required metaData flag for its group that the task lacks
 func isVetoedByRequiredMetaDataFlag(task: Task) -> Bool {
-    if RequiredMetaDataFlags.isVetoed(group: task.group, metaData: task.metaData, flags: RequiredMetaDataFlags.fromInfoPlist) {
+    if RequiredMetaDataFlags.isTaskVetoed(task, flags: RequiredMetaDataFlags.fromInfoPlist) {
         os_log("TaskId %@ in group %@ refused: required metaData flag missing", log: log, type: .error, task.taskId, task.group)
         return true
     }
@@ -157,15 +189,16 @@ func cancelTasksVetoedByRequiredMetaDataFlags(in session: URLSession) {
     }
     session.getAllTasks { urlSessionTasks in
         for urlSessionTask in urlSessionTasks {
-            guard let task = getTaskFrom(urlSessionTask: urlSessionTask) else {
-                os_log("URLSessionTask %d canceled: stored task could not be decoded to check required metaData flags", log: log, type: .error, urlSessionTask.taskIdentifier)
-                urlSessionTask.cancel()
+            let task = getTaskFrom(urlSessionTask: urlSessionTask)
+            if !RequiredMetaDataFlags.cancelsAtSessionCreation(task, flags: flags) {
                 continue
             }
-            if RequiredMetaDataFlags.isVetoed(group: task.group, metaData: task.metaData, flags: flags) {
+            if let task = task {
                 os_log("TaskId %@ in group %@ canceled: required metaData flag missing", log: log, type: .error, task.taskId, task.group)
-                urlSessionTask.cancel()
+            } else {
+                os_log("URLSessionTask %d canceled: stored task could not be decoded to check required metaData flags", log: log, type: .error, urlSessionTask.taskIdentifier)
             }
+            urlSessionTask.cancel()
         }
     }
 }
