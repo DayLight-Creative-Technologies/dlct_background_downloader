@@ -8,6 +8,7 @@ import org.junit.Test
 class RequiredMetaDataFlagsTest {
 
     private val declared = RequiredMetaDataFlags.parse("mediaUploads=scrubbed")
+    private val twoGroups = RequiredMetaDataFlags.parse("mediaUploads=scrubbed,avatars=resized")
 
     // parse
 
@@ -109,6 +110,7 @@ class RequiredMetaDataFlagsTest {
         assertTrue(RequiredMetaDataFlags.isVetoed("mediaUploads", """{"scrubbed":false}""", declared))
         assertTrue(RequiredMetaDataFlags.isVetoed("mediaUploads", """{"scrubbed":"true"}""", declared))
         assertTrue(RequiredMetaDataFlags.isVetoed("mediaUploads", """{"scrubbed":1}""", declared))
+        assertTrue(RequiredMetaDataFlags.isVetoed("mediaUploads", """{"scrubbed":1.0}""", declared))
         assertTrue(RequiredMetaDataFlags.isVetoed("mediaUploads", """{"scrubbed":null}""", declared))
         assertTrue(RequiredMetaDataFlags.isVetoed("mediaUploads", """{"scrubbed":[true]}""", declared))
         assertTrue(RequiredMetaDataFlags.isVetoed("mediaUploads", """{"scrubbed":{"v":true}}""", declared))
@@ -127,5 +129,21 @@ class RequiredMetaDataFlagsTest {
     fun `flag key match is case sensitive`() {
         assertTrue(RequiredMetaDataFlags.isVetoed("mediaUploads", """{"Scrubbed":true}""", declared))
         assertFalse(RequiredMetaDataFlags.isVetoed("MediaUploads", "", declared))
+    }
+
+    @Test
+    fun `every declared group requires its own key`() {
+        assertFalse(RequiredMetaDataFlags.isVetoed("mediaUploads", """{"scrubbed":true}""", twoGroups))
+        assertFalse(RequiredMetaDataFlags.isVetoed("avatars", """{"resized":true}""", twoGroups))
+        assertTrue(RequiredMetaDataFlags.isVetoed("mediaUploads", "{}", twoGroups))
+        assertTrue(RequiredMetaDataFlags.isVetoed("avatars", "{}", twoGroups))
+        assertTrue(RequiredMetaDataFlags.isVetoed("avatars", """{"resized":false}""", twoGroups))
+    }
+
+    @Test
+    fun `another group's key does not satisfy the flag`() {
+        assertTrue(RequiredMetaDataFlags.isVetoed("mediaUploads", """{"resized":true}""", twoGroups))
+        assertTrue(RequiredMetaDataFlags.isVetoed("avatars", """{"scrubbed":true}""", twoGroups))
+        assertFalse(RequiredMetaDataFlags.isVetoed("default", "", twoGroups))
     }
 }

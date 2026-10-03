@@ -1,0 +1,1 @@
+../../../background_downloader/Sources/background_downloader/RequiredMetaDataFlags.swift

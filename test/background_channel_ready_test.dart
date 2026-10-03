@@ -56,7 +56,11 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final events = <String>[];
   final handshakeGate = Completer<void>();
-  Object? replyDuringHandshake = 'no reply';
+  // Completed with Dart's reply to the update posted during the handshake.
+  // The reply is awaited, not polled: the handler decodes the task in the
+  // JsonProcessor isolate, which takes real time (a fixed pumpEventQueue was
+  // too short on CI runners).
+  final replyDuringHandshake = Completer<Object?>();
   late FileDownloader downloader;
 
   setUpAll(() async {
@@ -76,9 +80,9 @@ void main() {
       }
       events.add('backgroundChannelReady');
       // the handler must already be set: a native post now gets `true`
-      replyDuringHandshake = await sendToDart('statusUpdate', [
-        TaskStatus.running.index,
-      ]);
+      replyDuringHandshake.complete(
+        await sendToDart('statusUpdate', [TaskStatus.running.index]),
+      );
       await handshakeGate.future;
       return true;
     });
@@ -98,7 +102,10 @@ void main() {
     final resumed = downloader.resumeFromBackground();
     await pumpEventQueue();
     expect(events, contains('backgroundChannelReady'));
-    expect(replyDuringHandshake, isTrue);
+    expect(
+      await replyDuringHandshake.future.timeout(const Duration(seconds: 30)),
+      isTrue,
+    );
     expect(
       events.where((method) => method.startsWith('pop')),
       isEmpty,
