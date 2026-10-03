@@ -16,8 +16,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # This is Dart 3.5.0
-  FLUTTER_MIN_SDK: '3.24.0'
+  # This is Dart 3.12.0. The floor is Flutter 3.44: the plugin's top-level
+  # `kotlin { compilerOptions {} }` block (built-in Kotlin migration, dlct.4)
+  # needs it per Flutter's plugin-author guide, and 3.44 is the first release
+  # that builds the example's AGP 9 (android.builtInKotlin=false) on Gradle 9.1.
+  FLUTTER_MIN_SDK: '3.44.0'
 
 jobs:
   # format:
@@ -88,6 +91,7 @@ jobs:
         run: |
           results=example/build/background_downloader/test-results/testDebugUnitTest
           test -f "$results/TEST-com.bbflight.background_downloader.RequiredMetaDataFlagsTest.xml"
+          test -f "$results/TEST-com.bbflight.background_downloader.HelpersTest.xml"
           grep -h -o 'tests="[0-9]*"' "$results"/TEST-*.xml
 
   # [DLCT] Swift tests for the required-metaData-flag veto. The test package
